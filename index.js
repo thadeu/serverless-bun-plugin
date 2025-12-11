@@ -259,6 +259,25 @@ try {
   process.exit(1)
 }
 
+function isFunctionUrl(event) {
+  const domain = event?.requestContext?.domainName || ''
+  return domain.includes('.lambda-url.') && domain.endsWith('.on.aws')
+}
+
+function formatFunctionUrlResponse(result) {
+  if (result && typeof result === 'object' && 'statusCode' in result) {
+    const headers = result.headers || {}
+    const body = result.body || ''
+    const isBase64 = result.isBase64Encoded || false
+
+    return new Response(isBase64 ? Buffer.from(body, 'base64') : body, {
+      status: result.statusCode,
+      headers: headers,
+    })
+  }
+  return null
+}
+
 while (true) {
   let requestId
 
@@ -277,6 +296,27 @@ while (true) {
     }
 
     const result = await handler(event, context)
+
+    if (isFunctionUrl(event)) {
+      const response = formatFunctionUrlResponse(result)
+
+      if (response) {
+        const responseHeaders = { 'Content-Type': response.headers.get('content-type') || 'application/json' }
+
+        for (const [key, value] of response.headers.entries()) {
+          if (key.toLowerCase() !== 'content-type') {
+            responseHeaders[\`Lambda-Runtime-Function-Response-\${key}\`] = value
+          }
+        }
+
+        await fetch(\`\${base}/invocation/\${requestId}/response\`, {
+          method: 'POST',
+          headers: responseHeaders,
+          body: response.body,
+        })
+        continue
+      }
+    }
 
     await fetch(\`\${base}/invocation/\${requestId}/response\`, {
       method: 'POST',
