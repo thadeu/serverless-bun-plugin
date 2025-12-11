@@ -4,8 +4,8 @@ A Serverless Framework plugin that enables Bun runtime for AWS Lambda functions 
 
 ## Requirements
 
-- Bun installed locally (for bundling)
-- Docker installed and running
+- Bun installed locally (for cross-compilation)
+- Docker installed and running (for container image deployment)
 - Serverless Framework v3+
 - AWS account with ECR access
 
@@ -115,8 +115,9 @@ serverless invoke local -f myFunction -p event.json
 
 ## How It Works
 
-This plugin uses **Bun's compile feature** to create a standalone executable with everything bundled. This approach provides:
+This plugin uses **Bun's compile feature with cross-compilation** to create a standalone Linux executable. This approach provides:
 
+- **Native cross-compilation**: Compiles for Linux directly from macOS/Windows using `--target`
 - **Standalone executable**: Single binary with runtime + code (no dependencies)
 - **Full TypeScript support**: Including `tsconfig.json` paths and aliases
 - **Minimal memory footprint**: ~10-30MB usage (vs 130MB+ with interpreted code)
@@ -130,8 +131,8 @@ This plugin uses **Bun's compile feature** to create a standalone executable wit
 flowchart TD
     A[serverless deploy] --> B{Detect bun:1.x runtime}
     B --> C[Generate bootstrap.ts entry]
-    C --> D[bun build --compile]
-    D --> E[Create standalone executable]
+    C --> D[bun build --compile --target=bun-linux-x64/arm64]
+    D --> E[Create Linux standalone executable]
     E --> F[Generate minimal Dockerfile]
     F --> G[Build Docker image]
     G --> H[Push to ECR]
@@ -163,8 +164,8 @@ sequenceDiagram
 
 1. The plugin intercepts functions with `bun:1.x` runtime
 2. Generates a `bootstrap.ts` entry file that combines Lambda Runtime API logic + handler
-3. Runs `bun build --compile` to create a standalone executable
-4. Generates a minimal Dockerfile using only `public.ecr.aws/lambda/provided:al2023`
+3. Runs `bun build --compile --target=bun-linux-{arch}` to cross-compile for Linux
+4. Generates a minimal Dockerfile that only copies the pre-compiled executable
 5. Configures ECR image deployment automatically
 6. Cleans up temporary files after packaging
 
