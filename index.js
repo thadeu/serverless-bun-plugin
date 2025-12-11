@@ -299,7 +299,7 @@ main().catch((error) => {
       .filter(Boolean)
       .join(' ')
 
-    this.log.log(`bun: compiling for ${target}`)
+    // this.log.log(`bun: compiling for ${target}`)
 
     try {
       execSync(cmd, {
@@ -313,7 +313,7 @@ main().catch((error) => {
 
     const stats = fs.statSync(outFile)
     const sizeMB = (stats.size / 1024 / 1024).toFixed(2)
-    this.log.log(`bun: executable size: ${sizeMB}MB`)
+    // this.log.log(`bun: executable size: ${sizeMB}MB`)
   }
 
   generateDockerfile(functionDockerPath) {
