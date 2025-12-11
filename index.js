@@ -178,7 +178,7 @@ WORKDIR /var/task
 
 COPY --from=builder /usr/local/bin/bun /usr/local/bin/bun
 COPY --from=builder /build/node_modules ./node_modules
-COPY ${handlerDir}/ ./${handlerDir}/
+COPY . ./${handlerDir}/
 COPY runtime.js ./
 
 RUN chmod +x /usr/local/bin/bun
