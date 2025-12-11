@@ -1,7 +1,7 @@
 {
   "name": "serverless-bun-plugin",
   "description": "Serverless Bun Plugin",
-  "version": "0.1.9",
+  "version": "0.1.10",
   "main": "index.js",
   "repository": "https://github.com/thadeu/serverless-bun-plugin.git",
   "author": "thadeu <tadeuu@gmail.com>",

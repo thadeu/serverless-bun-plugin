@@ -283,7 +283,16 @@ main().catch((error) => {
     const target = arch === 'arm64' ? 'bun-linux-arm64' : 'bun-linux-x64'
     const minifyFlag = this.minify ? '--minify' : ''
 
-    const cmd = ['bun', 'build', '--compile', `--target=${target}`, bootstrapFile, '--outfile', outFile, minifyFlag]
+    const cmd = [
+      'bun',
+      'build',
+      '--compile',
+      `--target=${target}`,
+      bootstrapFile,
+      '--outfile',
+      outFile,
+      minifyFlag,
+    ]
       .filter(Boolean)
       .join(' ')
 
