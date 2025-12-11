@@ -292,6 +292,7 @@ main().catch((error) => {
       '--outfile',
       outFile,
       minifyFlag,
+      '--bytecode',
     ]
       .filter(Boolean)
       .join(' ')
@@ -307,6 +308,10 @@ main().catch((error) => {
       this.log.log(`bun: compilation failed`)
       throw new Error(`Compilation failed: ${error.stderr?.toString() || error.message}`)
     }
+
+    const stats = fs.statSync(outFile)
+    const sizeMB = (stats.size / 1024 / 1024).toFixed(2)
+    this.log.log(`bun: executable size: ${sizeMB}MB`)
   }
 
   generateDockerfile(functionDockerPath) {
