@@ -45,10 +45,8 @@ plugins:
 ```yaml
 custom:
   bun:
-    version: 1.3.4    # Bun version for Docker image (default: latest)
-    minify: true      # Minify bundle output (default: true)
-    sourcemap: none   # Sourcemap generation: none, inline, external (default: none)
-    target: bun       # Build target: bun, node, browser (default: bun)
+    version: 1.3.4    # Bun version for compilation (default: latest)
+    minify: true      # Minify compiled output (default: true)
 ```
 
 ### Architecture
@@ -117,26 +115,28 @@ serverless invoke local -f myFunction -p event.json
 
 ## How It Works
 
-This plugin uses **Bun's built-in bundler** to compile your TypeScript code into a single optimized JavaScript file before deployment. This approach provides:
+This plugin uses **Bun's compile feature** to create a standalone executable with everything bundled. This approach provides:
 
-- Full TypeScript support including `tsconfig.json` paths and aliases
-- Tree-shaking and dead code elimination
-- Single file output (no node_modules in the container)
-- Minification for smaller bundle size
-- Faster cold starts (pre-bundled code)
+- **Standalone executable**: Single binary with runtime + code (no dependencies)
+- **Full TypeScript support**: Including `tsconfig.json` paths and aliases
+- **Minimal memory footprint**: ~10-30MB usage (vs 130MB+ with interpreted code)
+- **Smaller container images**: ~100-150MB total (only base Lambda + executable)
+- **Faster cold starts**: Pre-compiled code loads instantly
+- **No Bun runtime needed**: Executable includes everything
 
 ### Deployment Flow
 
 ```mermaid
 flowchart TD
     A[serverless deploy] --> B{Detect bun:1.x runtime}
-    B --> C[bun build - bundle handler]
-    C --> D[Generate runtime.js]
-    D --> E[Generate Dockerfile]
-    E --> F[Build Docker image]
-    F --> G[Push to ECR]
-    G --> H[Deploy Lambda with container image]
-    H --> I[Cleanup temp files]
+    B --> C[Generate bootstrap.ts entry]
+    C --> D[bun build --compile]
+    D --> E[Create standalone executable]
+    E --> F[Generate minimal Dockerfile]
+    F --> G[Build Docker image]
+    G --> H[Push to ECR]
+    H --> I[Deploy Lambda with container image]
+    I --> J[Cleanup temp files]
 ```
 
 ### Lambda Execution Flow
@@ -144,29 +144,27 @@ flowchart TD
 ```mermaid
 sequenceDiagram
     participant API as Lambda Runtime API
-    participant RT as runtime.js
-    participant BUN as Bun
-    participant H as handler.js
+    participant EXE as bootstrap executable
+    participant H as Handler (compiled)
 
-    RT->>BUN: import handler.js
-    BUN->>H: Load bundled module
-    H-->>RT: Handler loaded
+    EXE->>H: Load handler (instant)
+    H-->>EXE: Handler ready
 
     loop Event Loop
-        RT->>API: GET /invocation/next
-        API-->>RT: Event + Request ID
-        RT->>H: handler(event, context)
-        H-->>RT: Response
-        RT->>API: POST /invocation/{id}/response
+        EXE->>API: GET /invocation/next
+        API-->>EXE: Event + Request ID
+        EXE->>H: handler(event, context)
+        H-->>EXE: Response
+        EXE->>API: POST /invocation/{id}/response
     end
 ```
 
 ### Process Steps
 
 1. The plugin intercepts functions with `bun:1.x` runtime
-2. Runs `bun build` to bundle the handler into a single `handler.js` file
-3. Generates a custom Lambda runtime (`runtime.js`) that handles the Lambda Runtime API
-4. Generates a minimal Dockerfile using `oven/bun` and `public.ecr.aws/lambda/provided:al2023`
+2. Generates a `bootstrap.ts` entry file that combines Lambda Runtime API logic + handler
+3. Runs `bun build --compile` to create a standalone executable
+4. Generates a minimal Dockerfile using only `public.ecr.aws/lambda/provided:al2023`
 5. Configures ECR image deployment automatically
 6. Cleans up temporary files after packaging
 

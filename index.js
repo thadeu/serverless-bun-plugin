@@ -12,8 +12,6 @@ export default class ServerlessBunPlugin {
     let customBun = this.serverless.service.custom?.bun || {}
     this.bunVersion = customBun.version || 'latest'
     this.minify = customBun.minify !== false
-    this.sourcemap = customBun.sourcemap || 'none'
-    this.target = customBun.target || 'bun'
 
     this.pluginPath = path.dirname(new URL(import.meta.url).pathname)
     this.dockerPath = path.join(this.serverless.config.servicePath, '.serverless', 'docker')
@@ -166,96 +164,24 @@ console.log(JSON.stringify(result, null, 2));
     const handlerMethod = handlerParts[handlerParts.length - 1]
 
     const entryPoint = path.join(servicePath, `${handlerFile}.ts`)
-    const outFile = path.join(functionDockerPath, 'handler.js')
 
-    this.bundleHandler(entryPoint, outFile, handlerMethod)
+    this.generateBootstrapEntry(functionDockerPath, entryPoint, handlerMethod)
 
-    this.generateRuntimeJs(functionDockerPath, handlerMethod)
+    this.compileBootstrap(functionDockerPath)
 
     this.generateDockerfile(functionDockerPath)
   }
 
-  bundleHandler(entryPoint, outFile, handlerMethod) {
-    const servicePath = this.serverless.config.servicePath
+  generateBootstrapEntry(functionDockerPath, entryPoint, handlerMethod) {
+    const bootstrapEntry = `import * as handlerModule from '${entryPoint}'
 
-    const minifyFlag = this.minify ? '--minify' : ''
-    const sourcemapFlag = this.sourcemap !== 'none' ? `--sourcemap=${this.sourcemap}` : ''
-
-    const cmd = [
-      'bun',
-      'build',
-      entryPoint,
-      '--outfile',
-      outFile,
-      '--target',
-      this.target,
-      minifyFlag,
-      sourcemapFlag,
-    ]
-      .filter(Boolean)
-      .join(' ')
-
-    this.log.log(`bun: bundling handler`)
-
-    try {
-      execSync(cmd, {
-        cwd: servicePath,
-        stdio: 'pipe',
-      })
-    } catch (error) {
-      this.log.log(`bun: bundle failed`)
-      throw new Error(`Bundle failed: ${error.stderr?.toString() || error.message}`)
-    }
-  }
-
-  generateDockerfile(functionDockerPath) {
-    const dockerfile = `FROM oven/bun:${this.bunVersion} AS base
-
-FROM public.ecr.aws/lambda/provided:al2023
-
-WORKDIR /var/task
-
-COPY --from=base /usr/local/bin/bun /usr/local/bin/bun
-
-COPY handler.js ./
-COPY runtime.js ./
-
-RUN chmod +x /usr/local/bin/bun
-
-ENV HOME=/tmp
-ENV TMPDIR=/tmp
-ENV BUN_INSTALL_CACHE_DIR=/tmp/.bun-cache
-
-ENTRYPOINT ["/usr/local/bin/bun", "run", "/var/task/runtime.js"]
-`
-
-    fs.writeFileSync(path.join(functionDockerPath, 'Dockerfile'), dockerfile)
-  }
-
-  generateRuntimeJs(functionDockerPath, handlerMethod) {
-    const runtimeJs = `const api = process.env.AWS_LAMBDA_RUNTIME_API
+const api = process.env.AWS_LAMBDA_RUNTIME_API
 const base = \`http://\${api}/2018-06-01/runtime\`
 
-let handler
+const handler = handlerModule['${handlerMethod}'] || handlerModule.default
 
-try {
-  const handlerModule = await import('./handler.js')
-  handler = handlerModule['${handlerMethod}'] || handlerModule.default
-
-  if (!handler) {
-    throw new Error('Handler function not found: ${handlerMethod}')
-  }
-} catch (error) {
-  console.error('Init error:', error)
-  await fetch(\`\${base}/init/error\`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      errorType: 'InitError',
-      errorMessage: error.message,
-      stackTrace: error.stack?.split('\\n') || [],
-    }),
-  })
+if (!handler) {
+  console.error('Handler function not found: ${handlerMethod}')
   process.exit(1)
 }
 
@@ -278,68 +204,116 @@ function formatFunctionUrlResponse(result) {
   return null
 }
 
-while (true) {
-  let requestId
+async function main() {
+  while (true) {
+    let requestId
 
-  try {
-    const res = await fetch(\`\${base}/invocation/next\`)
-    requestId = res.headers.get('lambda-runtime-aws-request-id')
-    const deadlineMs = res.headers.get('lambda-runtime-deadline-ms')
-    const event = await res.json()
+    try {
+      const res = await fetch(\`\${base}/invocation/next\`)
+      requestId = res.headers.get('lambda-runtime-aws-request-id')
+      const deadlineMs = res.headers.get('lambda-runtime-deadline-ms')
+      const event = await res.json()
 
-    const context = {
-      awsRequestId: requestId,
-      functionName: process.env.AWS_LAMBDA_FUNCTION_NAME,
-      functionVersion: process.env.AWS_LAMBDA_FUNCTION_VERSION,
-      memoryLimitInMB: process.env.AWS_LAMBDA_FUNCTION_MEMORY_SIZE,
-      getRemainingTimeInMillis: () => Number(deadlineMs) - Date.now(),
-    }
-
-    const result = await handler(event, context)
-
-    if (isFunctionUrl(event)) {
-      const response = formatFunctionUrlResponse(result)
-
-      if (response) {
-        const responseHeaders = { 'Content-Type': response.headers.get('content-type') || 'application/json' }
-
-        for (const [key, value] of response.headers.entries()) {
-          if (key.toLowerCase() !== 'content-type') {
-            responseHeaders[\`Lambda-Runtime-Function-Response-\${key}\`] = value
-          }
-        }
-
-        await fetch(\`\${base}/invocation/\${requestId}/response\`, {
-          method: 'POST',
-          headers: responseHeaders,
-          body: response.body,
-        })
-        continue
+      const context = {
+        awsRequestId: requestId,
+        functionName: process.env.AWS_LAMBDA_FUNCTION_NAME,
+        functionVersion: process.env.AWS_LAMBDA_FUNCTION_VERSION,
+        memoryLimitInMB: process.env.AWS_LAMBDA_FUNCTION_MEMORY_SIZE,
+        getRemainingTimeInMillis: () => Number(deadlineMs) - Date.now(),
       }
-    }
 
-    await fetch(\`\${base}/invocation/\${requestId}/response\`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(result),
-    })
-  } catch (error) {
-    console.error('Handler error:', error)
-    if (requestId) {
-      await fetch(\`\${base}/invocation/\${requestId}/error\`, {
+      const result = await handler(event, context)
+
+      if (isFunctionUrl(event)) {
+        const response = formatFunctionUrlResponse(result)
+
+        if (response) {
+          const responseHeaders = { 'Content-Type': response.headers.get('content-type') || 'application/json' }
+
+          for (const [key, value] of response.headers.entries()) {
+            if (key.toLowerCase() !== 'content-type') {
+              responseHeaders[\`Lambda-Runtime-Function-Response-\${key}\`] = value
+            }
+          }
+
+          await fetch(\`\${base}/invocation/\${requestId}/response\`, {
+            method: 'POST',
+            headers: responseHeaders,
+            body: response.body,
+          })
+          continue
+        }
+      }
+
+      await fetch(\`\${base}/invocation/\${requestId}/response\`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          errorType: error.constructor.name,
-          errorMessage: error.message,
-          stackTrace: error.stack?.split('\\n') || [],
-        }),
+        body: JSON.stringify(result),
       })
+    } catch (error) {
+      console.error('Handler error:', error)
+      if (requestId) {
+        await fetch(\`\${base}/invocation/\${requestId}/error\`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            errorType: error.constructor.name,
+            errorMessage: error.message,
+            stackTrace: error.stack?.split('\\n') || [],
+          }),
+        })
+      }
     }
   }
 }
+
+main().catch((error) => {
+  console.error('Init error:', error)
+  process.exit(1)
+})
 `
-    fs.writeFileSync(path.join(functionDockerPath, 'runtime.js'), runtimeJs)
+
+    fs.writeFileSync(path.join(functionDockerPath, 'bootstrap.ts'), bootstrapEntry)
+  }
+
+  compileBootstrap(functionDockerPath) {
+    const bootstrapFile = path.join(functionDockerPath, 'bootstrap.ts')
+    const outFile = path.join(functionDockerPath, 'bootstrap')
+
+    const minifyFlag = this.minify ? '--minify' : ''
+
+    const cmd = ['bun', 'build', '--compile', bootstrapFile, '--outfile', outFile, minifyFlag]
+      .filter(Boolean)
+      .join(' ')
+
+    this.log.log(`bun: compiling standalone executable`)
+
+    try {
+      execSync(cmd, {
+        stdio: 'pipe',
+      })
+    } catch (error) {
+      this.log.log(`bun: compilation failed`)
+      throw new Error(`Compilation failed: ${error.stderr?.toString() || error.message}`)
+    }
+  }
+
+  generateDockerfile(functionDockerPath) {
+    const dockerfile = `FROM public.ecr.aws/lambda/provided:al2023
+
+WORKDIR /var/task
+
+COPY bootstrap ./bootstrap
+
+RUN chmod +x bootstrap
+
+ENV HOME=/tmp
+ENV TMPDIR=/tmp
+
+ENTRYPOINT ["./bootstrap"]
+`
+
+    fs.writeFileSync(path.join(functionDockerPath, 'Dockerfile'), dockerfile)
   }
 
   cleanup() {
