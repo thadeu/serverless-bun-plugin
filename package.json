@@ -1,11 +1,12 @@
 {
   "name": "serverless-bun-plugin",
   "description": "Serverless Bun Plugin",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "main": "index.js",
   "repository": "https://github.com/thadeu/serverless-bun-plugin.git",
   "author": "thadeu <tadeuu@gmail.com>",
   "license": "MIT",
+  "type": "module",
   "devDependencies": {
     "serverless": "^3.40.0",
     "typescript": "^5.8.3"
