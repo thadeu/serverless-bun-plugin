@@ -209,7 +209,7 @@ console.log(JSON.stringify(result, null, 2));
   }
 
   generateDockerfile(functionDockerPath) {
-    const dockerfile = `FROM oven/bun:${this.bunVersion}-slim AS base
+    const dockerfile = `FROM oven/bun:${this.bunVersion} AS base
 
 FROM public.ecr.aws/lambda/provided:al2023
 
