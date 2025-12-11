@@ -1,7 +1,7 @@
 {
   "name": "serverless-bun-plugin",
   "description": "Serverless Bun Plugin",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "main": "index.js",
   "repository": "https://github.com/thadeu/serverless-bun-plugin.git",
   "author": "thadeu <tadeuu@gmail.com>",
@@ -14,11 +14,6 @@
   "files": [
     "index.js"
   ],
-  "exports": {
-    ".": {
-      "import": "./index.js"
-    }
-  },
   "keywords": [
     "serverless",
     "bun",
