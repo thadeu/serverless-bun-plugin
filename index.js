@@ -12,6 +12,7 @@ export default class ServerlessBunPlugin {
     let customBun = this.serverless.service.custom?.bun || {}
     this.bunVersion = customBun.version || 'latest'
     this.minify = customBun.minify !== false
+    this.bytecode = customBun.bytecode === true
 
     this.pluginPath = path.dirname(new URL(import.meta.url).pathname)
     this.dockerPath = path.join(this.serverless.config.servicePath, '.serverless', 'docker')
@@ -282,6 +283,7 @@ main().catch((error) => {
 
     const target = arch === 'arm64' ? 'bun-linux-arm64' : 'bun-linux-x64'
     const minifyFlag = this.minify ? '--minify' : ''
+    const bytecodeFlag = this.bytecode ? '--bytecode' : ''
 
     const cmd = [
       'bun',
@@ -292,7 +294,7 @@ main().catch((error) => {
       '--outfile',
       outFile,
       minifyFlag,
-      '--bytecode',
+      bytecodeFlag,
     ]
       .filter(Boolean)
       .join(' ')

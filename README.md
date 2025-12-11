@@ -47,6 +47,7 @@ custom:
   bun:
     version: 1.3.4    # Bun version for compilation (default: latest)
     minify: true      # Minify compiled output (default: true)
+    bytecode: false   # Enable bytecode compilation (default: false, can increase memory usage)
 ```
 
 ### Architecture
