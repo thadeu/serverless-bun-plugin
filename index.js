@@ -167,9 +167,9 @@ console.log(JSON.stringify(result, null, 2));
 
     this.generateBootstrapEntry(functionDockerPath, entryPoint, handlerMethod)
 
-    this.compileBootstrap(functionDockerPath)
+    this.copyHandlerFiles(servicePath, functionDockerPath, handlerFile)
 
-    this.generateDockerfile(functionDockerPath)
+    this.generateDockerfile(functionDockerPath, arch)
   }
 
   generateBootstrapEntry(functionDockerPath, entryPoint, handlerMethod) {
@@ -276,34 +276,66 @@ main().catch((error) => {
     fs.writeFileSync(path.join(functionDockerPath, 'bootstrap.ts'), bootstrapEntry)
   }
 
-  compileBootstrap(functionDockerPath) {
-    const bootstrapFile = path.join(functionDockerPath, 'bootstrap.ts')
-    const outFile = path.join(functionDockerPath, 'bootstrap')
+  copyHandlerFiles(servicePath, functionDockerPath, handlerFile) {
+    const handlerDir = path.dirname(handlerFile)
+    const srcDir = path.join(servicePath, handlerDir)
+    const destDir = path.join(functionDockerPath, handlerDir)
 
-    const minifyFlag = this.minify ? '--minify' : ''
+    if (fs.existsSync(srcDir)) {
+      this.copyDir(srcDir, destDir)
+    }
 
-    const cmd = ['bun', 'build', '--compile', bootstrapFile, '--outfile', outFile, minifyFlag]
-      .filter(Boolean)
-      .join(' ')
+    const tsconfigPath = path.join(servicePath, 'tsconfig.json')
+    if (fs.existsSync(tsconfigPath)) {
+      fs.copyFileSync(tsconfigPath, path.join(functionDockerPath, 'tsconfig.json'))
+    }
 
-    this.log.log(`bun: compiling standalone executable`)
+    const packageJsonPath = path.join(servicePath, 'package.json')
+    if (fs.existsSync(packageJsonPath)) {
+      fs.copyFileSync(packageJsonPath, path.join(functionDockerPath, 'package.json'))
+    }
 
-    try {
-      execSync(cmd, {
-        stdio: 'pipe',
-      })
-    } catch (error) {
-      this.log.log(`bun: compilation failed`)
-      throw new Error(`Compilation failed: ${error.stderr?.toString() || error.message}`)
+    const bunLockPath = path.join(servicePath, 'bun.lock')
+    if (fs.existsSync(bunLockPath)) {
+      fs.copyFileSync(bunLockPath, path.join(functionDockerPath, 'bun.lock'))
     }
   }
 
-  generateDockerfile(functionDockerPath) {
-    const dockerfile = `FROM public.ecr.aws/lambda/provided:al2023
+  copyDir(src, dest) {
+    fs.mkdirSync(dest, { recursive: true })
+
+    const entries = fs.readdirSync(src, { withFileTypes: true })
+
+    for (const entry of entries) {
+      const srcPath = path.join(src, entry.name)
+      const destPath = path.join(dest, entry.name)
+
+      if (entry.isDirectory()) {
+        this.copyDir(srcPath, destPath)
+      } else {
+        fs.copyFileSync(srcPath, destPath)
+      }
+    }
+  }
+
+  generateDockerfile(functionDockerPath, arch) {
+    const minifyFlag = this.minify ? '--minify' : ''
+
+    const dockerfile = `FROM oven/bun:${this.bunVersion} AS builder
+
+WORKDIR /build
+
+COPY . .
+
+RUN bun install --production
+
+RUN bun build --compile bootstrap.ts --outfile bootstrap ${minifyFlag}
+
+FROM public.ecr.aws/lambda/provided:al2023
 
 WORKDIR /var/task
 
-COPY bootstrap ./bootstrap
+COPY --from=builder /build/bootstrap ./bootstrap
 
 RUN chmod +x bootstrap
 
