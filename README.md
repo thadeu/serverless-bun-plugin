@@ -4,6 +4,7 @@ A Serverless Framework plugin that enables Bun runtime for AWS Lambda functions 
 
 ## Requirements
 
+- Bun installed locally (for bundling)
 - Docker installed and running
 - Serverless Framework v3+
 - AWS account with ECR access
@@ -41,15 +42,14 @@ plugins:
 
 ## Configuration
 
-### Bun Version (optional)
-
 ```yaml
 custom:
   bun:
-    version: 1.3.4
+    version: 1.3.4    # Bun version for Docker image (default: latest)
+    minify: true      # Minify bundle output (default: true)
+    sourcemap: none   # Sourcemap generation: none, inline, external (default: none)
+    target: bun       # Build target: bun, node, browser (default: bun)
 ```
-
-If not specified, the `latest` version will be used.
 
 ### Architecture
 
@@ -117,21 +117,22 @@ serverless invoke local -f myFunction -p event.json
 
 ## How It Works
 
-This plugin uses **runtime execution** instead of compilation. Your TypeScript code is executed directly by Bun without any transpilation to JavaScript. This approach provides:
+This plugin uses **Bun's built-in bundler** to compile your TypeScript code into a single optimized JavaScript file before deployment. This approach provides:
 
-- Faster deployment (no build step)
-- Smaller image size (no compiled artifacts)
-- Direct TypeScript execution with Bun's native support
-- Source maps not needed (original code runs as-is)
+- Full TypeScript support including `tsconfig.json` paths and aliases
+- Tree-shaking and dead code elimination
+- Single file output (no node_modules in the container)
+- Minification for smaller bundle size
+- Faster cold starts (pre-bundled code)
 
 ### Deployment Flow
 
 ```mermaid
 flowchart TD
     A[serverless deploy] --> B{Detect bun:1.x runtime}
-    B --> C[Generate Dockerfile]
-    C --> D[Copy handler source files]
-    D --> E[Generate custom runtime.js]
+    B --> C[bun build - bundle handler]
+    C --> D[Generate runtime.js]
+    D --> E[Generate Dockerfile]
     E --> F[Build Docker image]
     F --> G[Push to ECR]
     G --> H[Deploy Lambda with container image]
@@ -145,10 +146,10 @@ sequenceDiagram
     participant API as Lambda Runtime API
     participant RT as runtime.js
     participant BUN as Bun
-    participant H as handler.ts
+    participant H as handler.js
 
-    RT->>BUN: import handler.ts
-    BUN->>H: Execute TypeScript directly
+    RT->>BUN: import handler.js
+    BUN->>H: Load bundled module
     H-->>RT: Handler loaded
 
     loop Event Loop
@@ -163,9 +164,9 @@ sequenceDiagram
 ### Process Steps
 
 1. The plugin intercepts functions with `bun:1.x` runtime
-2. Generates a Dockerfile using `oven/bun` and `public.ecr.aws/lambda/provided:al2023` as base images
-3. Creates a custom Lambda runtime that handles the Lambda Runtime API
-4. Copies TypeScript source files directly (no compilation)
+2. Runs `bun build` to bundle the handler into a single `handler.js` file
+3. Generates a custom Lambda runtime (`runtime.js`) that handles the Lambda Runtime API
+4. Generates a minimal Dockerfile using `oven/bun` and `public.ecr.aws/lambda/provided:al2023`
 5. Configures ECR image deployment automatically
 6. Cleans up temporary files after packaging
 

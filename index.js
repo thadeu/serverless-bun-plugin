@@ -9,12 +9,11 @@ export default class ServerlessBunPlugin {
     this.options = options
     this.log = serverless.cli || console
 
-    let customBun = this.serverless.service.custom.bun
-    this.bunVersion = 'latest'
-
-    if (customBun) {
-      this.bunVersion = customBun.version
-    }
+    let customBun = this.serverless.service.custom?.bun || {}
+    this.bunVersion = customBun.version || 'latest'
+    this.minify = customBun.minify !== false
+    this.sourcemap = customBun.sourcemap || 'none'
+    this.target = customBun.target || 'bun'
 
     this.pluginPath = path.dirname(new URL(import.meta.url).pathname)
     this.dockerPath = path.join(this.serverless.config.servicePath, '.serverless', 'docker')
@@ -42,6 +41,7 @@ export default class ServerlessBunPlugin {
 
     const handlerParts = fn.handler.split('.')
     const handlerFile = handlerParts.slice(0, -1).join('.')
+    const handlerMethod = handlerParts[handlerParts.length - 1]
 
     const eventData = this.options.data || '{}'
     const eventPath = this.options.path
@@ -56,8 +56,9 @@ export default class ServerlessBunPlugin {
     const handlerFullPath = path.join(servicePath, `${handlerFile}.ts`)
 
     const invokeScript = `
-import handler from '${handlerFullPath}';
+import * as handlerModule from '${handlerFullPath}';
 
+const handler = handlerModule['${handlerMethod}'] || handlerModule.default;
 const event = ${event};
 const context = { awsRequestId: 'local-${Date.now()}', functionName: '${functionName}' };
 const result = await handler(event, context);
@@ -93,11 +94,11 @@ console.log(JSON.stringify(result, null, 2));
         continue
       }
 
-      this.log.log(`bun: configuring ${name} for Docker deployment`)
+      this.log.log(`bun: building ${name}`)
 
       const arch = fn.architecture || service.provider.architecture || 'x86_64'
 
-      this.generateDockerfile(name, fn, arch)
+      await this.buildAndPackage(name, fn, arch)
 
       delete fn.runtime
       delete fn.handler
@@ -133,11 +134,11 @@ console.log(JSON.stringify(result, null, 2));
       return
     }
 
-    this.log.log(`bun: configuring ${functionName} for Docker deployment`)
+    this.log.log(`bun: building ${functionName}`)
 
     const arch = fn.architecture || service.provider.architecture || 'x86_64'
 
-    this.generateDockerfile(functionName, fn, arch)
+    await this.buildAndPackage(functionName, fn, arch)
 
     delete fn.runtime
     delete fn.handler
@@ -154,7 +155,7 @@ console.log(JSON.stringify(result, null, 2));
     }
   }
 
-  generateDockerfile(name, fn, arch) {
+  async buildAndPackage(name, fn, arch) {
     const servicePath = this.serverless.config.servicePath
     const functionDockerPath = path.join(this.dockerPath, name)
 
@@ -163,22 +164,60 @@ console.log(JSON.stringify(result, null, 2));
     const handlerParts = fn.handler.split('.')
     const handlerFile = handlerParts.slice(0, -1).join('.')
     const handlerMethod = handlerParts[handlerParts.length - 1]
-    const handlerDir = path.dirname(handlerFile)
 
-    const dockerfile = `FROM oven/bun:${this.bunVersion} AS builder
+    const entryPoint = path.join(servicePath, `${handlerFile}.ts`)
+    const outFile = path.join(functionDockerPath, 'handler.js')
 
-WORKDIR /build
+    this.bundleHandler(entryPoint, outFile, handlerMethod)
 
-COPY package.json bun.lock* ./
-RUN bun install
+    this.generateRuntimeJs(functionDockerPath, handlerMethod)
+
+    this.generateDockerfile(functionDockerPath)
+  }
+
+  bundleHandler(entryPoint, outFile, handlerMethod) {
+    const servicePath = this.serverless.config.servicePath
+
+    const minifyFlag = this.minify ? '--minify' : ''
+    const sourcemapFlag = this.sourcemap !== 'none' ? `--sourcemap=${this.sourcemap}` : ''
+
+    const cmd = [
+      'bun',
+      'build',
+      entryPoint,
+      '--outfile',
+      outFile,
+      '--target',
+      this.target,
+      minifyFlag,
+      sourcemapFlag,
+    ]
+      .filter(Boolean)
+      .join(' ')
+
+    this.log.log(`bun: bundling handler`)
+
+    try {
+      execSync(cmd, {
+        cwd: servicePath,
+        stdio: 'pipe',
+      })
+    } catch (error) {
+      this.log.log(`bun: bundle failed`)
+      throw new Error(`Bundle failed: ${error.stderr?.toString() || error.message}`)
+    }
+  }
+
+  generateDockerfile(functionDockerPath) {
+    const dockerfile = `FROM oven/bun:${this.bunVersion}-slim AS base
 
 FROM public.ecr.aws/lambda/provided:al2023
 
 WORKDIR /var/task
 
-COPY --from=builder /usr/local/bin/bun /usr/local/bin/bun
-COPY --from=builder /build/node_modules ./node_modules
-COPY . ./${handlerDir}/
+COPY --from=base /usr/local/bin/bun /usr/local/bin/bun
+
+COPY handler.js ./
 COPY runtime.js ./
 
 RUN chmod +x /usr/local/bin/bun
@@ -191,32 +230,16 @@ ENTRYPOINT ["/usr/local/bin/bun", "run", "/var/task/runtime.js"]
 `
 
     fs.writeFileSync(path.join(functionDockerPath, 'Dockerfile'), dockerfile)
-
-    this.generateRuntimeJs(functionDockerPath, handlerFile, handlerMethod)
-
-    const srcPackageJson = path.join(servicePath, 'package.json')
-    if (fs.existsSync(srcPackageJson)) {
-      fs.copyFileSync(srcPackageJson, path.join(functionDockerPath, 'package.json'))
-    }
-
-    const srcBunLock = path.join(servicePath, 'bun.lock')
-    if (fs.existsSync(srcBunLock)) {
-      fs.copyFileSync(srcBunLock, path.join(functionDockerPath, 'bun.lock'))
-    }
-
-    const handlerSrcDir = path.join(servicePath, handlerDir)
-    const handlerDestDir = path.join(functionDockerPath, handlerDir)
-    this.copyDir(handlerSrcDir, handlerDestDir)
   }
 
-  generateRuntimeJs(functionDockerPath, handlerFile, handlerMethod) {
+  generateRuntimeJs(functionDockerPath, handlerMethod) {
     const runtimeJs = `const api = process.env.AWS_LAMBDA_RUNTIME_API
 const base = \`http://\${api}/2018-06-01/runtime\`
 
 let handler
 
 try {
-  const handlerModule = await import('./${handlerFile}.ts')
+  const handlerModule = await import('./handler.js')
   handler = handlerModule['${handlerMethod}'] || handlerModule.default
 
   if (!handler) {
@@ -277,23 +300,6 @@ while (true) {
 }
 `
     fs.writeFileSync(path.join(functionDockerPath, 'runtime.js'), runtimeJs)
-  }
-
-  copyDir(src, dest) {
-    fs.mkdirSync(dest, { recursive: true })
-
-    const entries = fs.readdirSync(src, { withFileTypes: true })
-
-    for (const entry of entries) {
-      const srcPath = path.join(src, entry.name)
-      const destPath = path.join(dest, entry.name)
-
-      if (entry.isDirectory()) {
-        this.copyDir(srcPath, destPath)
-      } else {
-        fs.copyFileSync(srcPath, destPath)
-      }
-    }
   }
 
   cleanup() {
